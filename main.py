@@ -1,76 +1,106 @@
 import os
-import asyncio
-import aiofiles as aiof
-import time
 from dotenv import load_dotenv
+from twitchio.ext import commands
+from stream_guard import StreamGuardBot
 
-from twitchAPI.twitch import Twitch
-from twitchAPI.helper import limit
-from twitchAPI.oauth import UserAuthenticator
-from twitchAPI.type import AuthScope, ChatEvent
-from twitchAPI.chat import Chat, EventData, ChatMessage, ChatSub, ChatCommand
 
-load_dotenv()
+load_dotenv(override=True)
 
 config = {
-    'id': os.environ['CLIENT_ID'],
-    'secret': os.environ['CLIENT_SECRET'],
-    'scope': [AuthScope.CHAT_READ, AuthScope.CHAT_EDIT, AuthScope.CHANNEL_MODERATE],
-    'token': os.environ['TOKEN'],
+    'client_id': os.environ['CLIENT_ID'],
+    'client_secret': os.environ['CLIENT_SECRET'],
+    'access_token': os.environ['ACCESS_TOKEN'],
     'refresh_token': os.environ['REFRESH_TOKEN'],
-    'channel': 'stream_guard_bot'
+    'channel': os.environ['INITIAL_CHANNEL']
 }
 
+class Bot(commands.Bot):
+    def __init__(self):
+        super().__init__(token=config['access_token'], prefix='!', initial_channels = [config['channel']])
+        self.channels = {config['channel']: StreamGuardBot(config['channel'])}
 
-async def on_ready(ready_event: EventData):
-    print('Joining channels')
-    await ready_event.chat.join_room(config['channel'])
+    async def event_ready(self):
+        print(f'Logged in as | {self.nick}')
+        print(f'User id is | {self.user_id}')
 
-
-async def on_message(msg: ChatMessage):
-    async with aiof.open(f'{msg.room.name}.txt', 'a') as out_file:
-        await out_file.write(f'{msg.sent_timestamp}, {msg.user.name}, {msg.text}\n')
-        await out_file.flush()
-
-    print(f'in {msg.room.name}, {msg.user.name} said: {msg.text}')
-
-
-async def get_streams(twitch):
-    stream_iterator = twitch.get_streams(
-        first=100,
-        language='en',
-        stream_type='live'
-    )
+    async def event_message(self, message):
+        if message.echo:
+            return
     
-    streams = []
-    async for stream in limit(stream_iterator, 1):
-        streams.append(stream)
+        if message.content.startswith('!'):
+            await self.handle_commands(message)
+        else:
+            message.content = '!ask {question}'.format(question=message.content)
+            await self.handle_commands(message)
 
-    return streams
+    @commands.command(name='guard')
+    async def add_channel(self, context: commands.Context):
+        channel = context.author.name
+        await context.send(f'{channel} is now guarded!')
+        await self.event_join(channel, context.author)
 
-async def run():
-    twitch = await Twitch(config['id'], config['secret'])
-    await twitch.set_user_authentication(
-        config['token'],
-        config['scope'],
-        config['refresh_token']
-    )
+        # Stream Guard Bot Section
+        self.channels[channel] = StreamGuardBot(channel)
+        
 
-    streams = await get_streams(twitch)
-    chat = await Chat(twitch)
+    @commands.command(name='part')
+    async def remove_channel(self, context: commands.Context):
+        channel = context.author.name
 
-    # register the handlers for the events you want
-    chat.register_event(ChatEvent.READY, on_ready)
-    chat.register_event(ChatEvent.MESSAGE, on_message)
+        # Ignore request if user did not previous call `!guard`
+        if channel not in self.channels:
+            return
+        
+        await context.send(f"Stream Guard Bot has left {channel}'s chat")
+        await self.event_part(context.get_user(channel))
+        
+        del self.channels[channel]
 
-    chat.start()
-    tmp = await chat.join_room(streams[0].user_name)
-    print(tmp)
+    @commands.command(name='addQA')
+    async def add_qa(self, context: commands.Context, question: str, answer: str):
+        if not context.author.is_broadcaster and not context.author.is_mod:
+            return
 
-    try:
-        input('press ENTER to stop\n')
-    finally:
-        chat.stop()
-        await twitch.close()
+        channel = context.channel.name
+        stream_guard_bot = self.channels[channel]
+        stream_guard_bot.add_qa(question, answer)
 
-asyncio.run(run())
+    @commands.command(name='removeQA')
+    async def remove_qa(self, context: commands.Context, index: int):
+        if not context.author.is_broadcaster and not context.author.is_mod:
+            return
+        
+        channel = context.channel.name
+        stream_guard_bot = self.channels[channel]
+        stream_guard_bot.remove_qa(index)
+
+    @commands.command(name='listFAQ')
+    async def list_faq(self, context: commands.Context):
+        channel = context.channel.name
+        stream_guard_bot = self.channels[channel]
+        faq = stream_guard_bot.list_faq()
+        await context.send(faq)
+
+    @commands.command(name='ask')
+    async def ask(self, context: commands.Context, *, question: str):
+        channel = context.channel.name
+        stream_guard_bot = self.channels[channel]
+        response = stream_guard_bot.respond([question])
+        
+        if response == '':
+            return
+        
+        await context.reply(response)
+
+    @commands.command(name='setResponseThreshold')
+    async def set_threhold(self, context: commands.Context, response_threshold: str):
+        if not context.author.is_broadcaster and not context.author.is_mod:
+            return
+        
+        response_threshold = float(response_threshold)
+        channel = context.channel.name
+        stream_guard_bot = self.channels[channel]
+        response = stream_guard_bot.response_threshold = response_threshold
+
+bot = Bot()
+bot.run()
