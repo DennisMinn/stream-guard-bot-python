@@ -1,8 +1,8 @@
 import os
 import requests
+import asyncio
 from dotenv import load_dotenv
-# from twitchio.ext import commands
-from TwitchIO.twitchio.ext import commands
+from twitchio.ext import commands
 from stream_guard import StreamGuardBot
 
 
@@ -133,6 +133,28 @@ class Bot(commands.Bot):
         channel = context.channel.name
         stream_guard_bot = self.channels[channel]
         response = stream_guard_bot.response_threshold = response_threshold
+
+
+def refresh_token():
+    url = 'https://id.twitch.tv/oauth2/token'
+    data = {
+        'client_id': config['client_id'],
+        'client_secret': config['client_secret'],
+        'grant_type': 'refresh_token',
+        'refresh_token': config['refresh_token']
+    }
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded'
+    }
+
+    response = requests.post(url, data=data, headers=headers)
+    token = response.json()
+
+    # Assign new token
+    config['access_token'] = token['access_token']
+    config['refresh_token'] = token['refresh_token']
+
+    expiration = token['expires_in']
 
 bot = Bot()
 bot.run()
