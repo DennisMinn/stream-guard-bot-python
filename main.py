@@ -19,10 +19,11 @@ config = {
 
 class Bot(commands.Bot):
     def __init__(self):
+        os.makedirs('channels', exist_ok=True)
+
         with open(f"channels/{config['channel']}.jsonl", 'a') as channel_file:
             pass
 
-        os.makedirs('channel', exist_ok=True)
         initial_channels = [
             os.path.splitext(channel_file)[0] for channel_file
             in os.listdir('channels')
@@ -36,7 +37,10 @@ class Bot(commands.Bot):
     async def event_ready(self):
         print(f'Logged in as | {self.nick}')
         print(f'User id is | {self.user_id}')
-        
+        while True:
+            expiration = await self.refresh_token()
+            await asyncio.sleep((expiration - 1800))
+
     async def event_message(self, message):
         if message.echo:
             return
@@ -46,6 +50,27 @@ class Bot(commands.Bot):
         else:
             message.content = '!_ask {question}'.format(question=message.content)
             await self.handle_commands(message)
+
+    async def refresh_token(self):
+        url = 'https://id.twitch.tv/oauth2/token'
+        data = {
+            'client_id': config['client_id'],
+            'client_secret': config['client_secret'],
+            'grant_type': 'refresh_token',
+            'refresh_token': config['refresh_token']
+        }
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+
+        response = requests.post(url, data=data, headers=headers)
+        token = response.json()
+
+        config['access_token'] = token['access_token']
+        config['refresh_token'] = token['refresh_token']
+        self._connection._token = token['access_token']
+
+        return token['expires_in']
 
     @commands.command(name='guard')
     async def add_channel(self, context: commands.Context, channel: str):
@@ -60,7 +85,6 @@ class Bot(commands.Bot):
         await self.join_channels([channel])
         # Stream Guard Bot Section
         self.channels[channel] = StreamGuardBot(channel)
-        
 
     @commands.command(name='part')
     async def remove_channel(self, context: commands.Context):
@@ -133,28 +157,6 @@ class Bot(commands.Bot):
         channel = context.channel.name
         stream_guard_bot = self.channels[channel]
         response = stream_guard_bot.response_threshold = response_threshold
-
-
-def refresh_token():
-    url = 'https://id.twitch.tv/oauth2/token'
-    data = {
-        'client_id': config['client_id'],
-        'client_secret': config['client_secret'],
-        'grant_type': 'refresh_token',
-        'refresh_token': config['refresh_token']
-    }
-    headers = {
-        'Content-Type': 'application/x-www-form-urlencoded'
-    }
-
-    response = requests.post(url, data=data, headers=headers)
-    token = response.json()
-
-    # Assign new token
-    config['access_token'] = token['access_token']
-    config['refresh_token'] = token['refresh_token']
-
-    expiration = token['expires_in']
 
 bot = Bot()
 bot.run()

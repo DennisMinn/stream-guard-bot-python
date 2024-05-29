@@ -2,10 +2,15 @@ import os
 import json
 import numpy as np
 import faiss
+import openai
 from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 from typing import List
 
+openai.api_key = os.environ['OPENAI_API_KEY']
 client = OpenAI()
 embedding_size = 1536
 embedding_model_id = 'text-embedding-3-small'
@@ -26,10 +31,10 @@ class StreamGuardBot:
             # Remove the old FAQ, otherwise there will be duplicates
             os.remove(f'channels/{self.channel}.jsonl')
 
-        # Re-add the FAQ
+        # Rebuild vector database
         for qa in faq:
             self.add_qa(qa['question'], qa['answer'])
-                    
+
     def add_qa(self, question: str, answer: str):
         qa = {'question': question, 'answer': answer}
         self.faq.append(qa)
@@ -66,12 +71,12 @@ class StreamGuardBot:
 
         faq = ' | '.join(faq)
         return faq
-    
+
     def respond(self, question: str):
         # Ignores query if empty database is empty
         if self.vector_database.ntotal < 1:
             return ''
-        
+
         system_prompt = (
             "Users are communicating with {channel}, not the AI "
             "To answer, refer to the << FAQ >>."
@@ -86,7 +91,7 @@ class StreamGuardBot:
             model=embedding_model_id
         )
         question_embedding = np.array([embedding_api_response.data[0].embedding])
-        
+
         distance, faq_index = self.vector_database.search(question_embedding, 1)
         distance, faq_index = distance.item(), faq_index.item()
 
@@ -94,7 +99,7 @@ class StreamGuardBot:
             channel=self.channel,
             faq=str(self.faq[faq_index])
         )
-        
+
         generation_api_response = client.chat.completions.create(
             model=generation_model_id,
             messages=[
@@ -122,13 +127,13 @@ class StreamGuardBot:
             "<< FAQ >>\n"
             "{faq}\n"
         )
-        
+
         embedding_api_response = client.embeddings.create(
             input=[question],
             model=embedding_model_id
         )
         question_embedding = np.array([embedding_api_response.data[0].embedding])
-        
+
         distance, faq_index = self.vector_database.search(question_embedding, 1)
         distance, faq_index = distance.item(), faq_index.item()
 
@@ -139,7 +144,7 @@ class StreamGuardBot:
             channel=self.channel,
             faq=str(self.faq[faq_index])
         )
-        
+
         generation_api_response = client.chat.completions.create(
             model=generation_model_id,
             messages=[
