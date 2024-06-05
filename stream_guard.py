@@ -3,15 +3,15 @@ import json
 import numpy as np
 import faiss
 import openai
-from openai import OpenAI
 from dotenv import load_dotenv
-
-load_dotenv(override=True)
 
 from typing import List
 
+load_dotenv(override=True)
 openai.api_key = os.environ['OPENAI_API_KEY']
-client = OpenAI()
+
+# Setup OpenAI client
+client = openai.OpenAI()
 embedding_size = 1536
 embedding_model_id = 'text-embedding-3-small'
 generation_model_id = 'gpt-3.5-turbo'
@@ -21,6 +21,7 @@ class StreamGuardBot:
         self.channel = channel
         self.faq = []
         self.response_threshold = 1
+        self.toggle_ask_command = False
         self.vector_database = faiss.IndexFlatL2(embedding_size)
 
         faq = []
@@ -35,7 +36,7 @@ class StreamGuardBot:
         for qa in faq:
             self.add_qa(qa['question'], qa['answer'])
 
-    def add_qa(self, question: str, answer: str):
+    def add_qa(self, question: str, answer: str) -> str:
         qa = {'question': question, 'answer': answer}
         self.faq.append(qa)
 
@@ -50,7 +51,9 @@ class StreamGuardBot:
             qa_json = json.dumps(qa)
             channel_file.write(qa_json + '\n')
 
-    def remove_qa(self, index: int):
+        return f'Added {question} -> {answer}'
+
+    def remove_qa(self, index: int) -> str:
         index = index - 1
         qa = self.faq.pop(index)
 
@@ -63,7 +66,7 @@ class StreamGuardBot:
 
         return f"{qa['question']} -> {qa['answer']}"
 
-    def list_faq(self):
+    def list_faq(self) -> str:
         faq = [
             f'{i + 1}. {qa_dict["question"]} -> {qa_dict["answer"]}'
             for i, qa_dict in enumerate(self.faq)
@@ -72,33 +75,16 @@ class StreamGuardBot:
         faq = ' | '.join(faq)
         return faq
 
-    def respond(self, question: str):
-        # Ignores query if empty database is empty
-        if self.vector_database.ntotal < 1:
-            return ''
+    def respond(self, question: str) -> str:
+        if not self.toggle_ask_command:
+            return '!ask command is disabled.'
 
         system_prompt = (
-            "Users are communicating with {channel}, not the AI "
-            "To answer, refer to the << FAQ >>."
+            "You are Stream Guard Bot a helpful AI assistant to {channel}. "
             "Keep your responses concise and respond in the 3rd person. "
-            "Do not make up your response or use external information.\n"
-            "<< FAQ >>\n"
-            "{faq}\n"
         )
 
-        embedding_api_response = client.embeddings.create(
-            input=[question],
-            model=embedding_model_id
-        )
-        question_embedding = np.array([embedding_api_response.data[0].embedding])
-
-        distance, faq_index = self.vector_database.search(question_embedding, 1)
-        distance, faq_index = distance.item(), faq_index.item()
-
-        bot_prompt = system_prompt.format(
-            channel=self.channel,
-            faq=str(self.faq[faq_index])
-        )
+        bot_prompt = system_prompt.format(channel=self.channel)
 
         generation_api_response = client.chat.completions.create(
             model=generation_model_id,
@@ -113,19 +99,19 @@ class StreamGuardBot:
         message = generation_api_response.choices[0].message.content
         return message
     
-    def _respond(self, question: str):
+    def _respond(self, question: str) -> str:
         # Ignores query if empty database is empty
         if self.vector_database.ntotal < 1:
             return ''
 
         system_prompt = (
-            "Users are communicating with {channel}, not the AI "
-            "To answer, refer to the << FAQ >>."
+            "Users are communicating with {channel}, not the AI. "
             "Keep your responses concise and respond in the 3rd person. "
-            "If the answer is not provided in the << FAQ >>, respond with 'I do not know'. "
-            "Do not make up your response or use external information.\n"
-            "<< FAQ >>\n"
-            "{faq}\n"
+            "Answer questions that correspond to the <<FAQ>>. "
+            "Respond with 'Not in {channel}'s <<FAQ>>.' to unrelated questions. "
+            "Do NOT make up your answer .\n"
+            "<<FAQ>>\n"
+            "{faq}"
         )
 
         embedding_api_response = client.embeddings.create(
@@ -156,4 +142,4 @@ class StreamGuardBot:
         )
 
         message = generation_api_response.choices[0].message.content
-        return message if message != 'I do not know.' else ''
+        return message if message != "Not in {channel}'s <<FAQ>>." else ""

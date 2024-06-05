@@ -29,7 +29,7 @@ class Bot(commands.Bot):
             in os.listdir('channels')
         ]
 
-        super().__init__(token=config['access_token'], prefix='!', initial_channels = initial_channels)
+        super().__init__(token=config['access_token'], prefix='!', initial_channels=initial_channels)
         self.channels = {}
         for channel in initial_channels:
             self.channels[channel] = StreamGuardBot(channel)
@@ -37,6 +37,8 @@ class Bot(commands.Bot):
     async def event_ready(self):
         print(f'Logged in as | {self.nick}')
         print(f'User id is | {self.user_id}')
+
+        # Refresh token after expiration period passes
         while True:
             expiration = await self.refresh_token()
             await asyncio.sleep((expiration - 1800))
@@ -44,7 +46,7 @@ class Bot(commands.Bot):
     async def event_message(self, message):
         if message.echo:
             return
-    
+
         if message.content.startswith('!'):
             await self.handle_commands(message)
         else:
@@ -74,7 +76,8 @@ class Bot(commands.Bot):
 
     @commands.command(name='guard')
     async def add_channel(self, context: commands.Context, channel: str):
-        if context.author.name != 'dennosity':
+        # Command can only be called in `stream_guard_bot`'s chat
+        if context.channel.name != 'stream_guard_bot':
             return
 
         if channel in self.channels:
@@ -88,15 +91,18 @@ class Bot(commands.Bot):
 
     @commands.command(name='part')
     async def remove_channel(self, context: commands.Context):
-        channel = context.author.name
+        # Command can only be called in `stream_guard_bot`'s chat
+        if context.channel.name != 'stream_guard_bot':
+            return
 
+        channel = context.author.name
         # Ignore request if user did not previous call `!guard`
         if channel not in self.channels:
             return
-        
+
         await context.send(f"Stream Guard Bot has left {channel}'s chat")
         await self.part_channels([channel])
-        
+
         del self.channels[channel]
         os.remove(f'channels/{channel}.jsonl')
 
@@ -107,8 +113,9 @@ class Bot(commands.Bot):
 
         channel = context.channel.name
         stream_guard_bot = self.channels[channel]
-        stream_guard_bot.add_qa(question, answer)
-        await context.send(f'Added {question} -> {answer} ')
+        response = stream_guard_bot.add_qa(question, answer)
+
+        await context.send(response)
 
     @commands.command(name='removeQA')
     async def remove_qa(self, context: commands.Context, index: int):
@@ -117,13 +124,16 @@ class Bot(commands.Bot):
         
         channel = context.channel.name
         stream_guard_bot = self.channels[channel]
-        stream_guard_bot.remove_qa(index)
+        response = stream_guard_bot.remove_qa(index)
+
+        await context.send(response)
 
     @commands.command(name='listFAQ')
     async def list_faq(self, context: commands.Context):
         channel = context.channel.name
         stream_guard_bot = self.channels[channel]
         faq = stream_guard_bot.list_faq()
+
         await context.send(faq)
 
     @commands.command(name='_ask')
@@ -156,7 +166,22 @@ class Bot(commands.Bot):
         response_threshold = float(response_threshold)
         channel = context.channel.name
         stream_guard_bot = self.channels[channel]
-        response = stream_guard_bot.response_threshold = response_threshold
+        stream_guard_bot.response_threshold = response_threshold
+
+        await context.send(f'Response Threshold set to {response_threshold}')
+
+    @commands.command(name='toggleAskCommand')
+    async def set_threhold(self, context: commands.Context):
+        if not context.author.is_broadcaster and not context.author.is_mod:
+            return
+
+        channel = context.channel.name
+        stream_guard_bot = self.channels[channel]
+        stream_guard_bot.toggle_ask_command = not stream_guard_bot.toggle_ask_command
+
+        toggle_ask_command = 'enabled' if stream_guard_bot.toggle_ask_command else 'disabled'
+        await context.send(f'!ask {toggle_ask_command}')
+
 
 bot = Bot()
 bot.run()
