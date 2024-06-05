@@ -55,7 +55,7 @@ class StreamGuardBot:
 
     def remove_qa(self, index: int) -> str:
         index = index - 1
-        qa = self.faq.pop(index)
+        removed_qa = self.faq.pop(index)
 
         # FAISS expects a 2-d np.array
         self.vector_database.remove_ids(np.array([index]))
@@ -64,7 +64,7 @@ class StreamGuardBot:
                 qa_json = json.dumps(qa)
                 channel_file.write(qa_json + '\n')
 
-        return f"{qa['question']} -> {qa['answer']}"
+        return f"{removed_qa['question']} -> {removed_qa['answer']}"
 
     def list_faq(self) -> str:
         faq = [
