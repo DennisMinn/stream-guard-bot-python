@@ -145,6 +145,5 @@ class StreamGuardBot:
             temperature=0
         )
 
-        print("Not in {self.channel}'s FAQ.")
         message = generation_api_response.choices[0].message.content
         return message if message != f"Not in {self.channel}'s FAQ." else ""
