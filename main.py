@@ -1,6 +1,7 @@
 import os
 import requests
 import asyncio
+import textwrap
 from dotenv import load_dotenv
 from twitchio.ext import commands
 from stream_guard import StreamGuardBot
@@ -134,7 +135,9 @@ class Bot(commands.Bot):
         stream_guard_bot = self.channels[channel]
         faq = stream_guard_bot.list_faq()
 
-        await context.send(faq)
+        chunks = textwrap.wrap(faq, 500)
+        for chunk in chunks:
+            await context.send(chunk)
 
     @commands.command(name='_ask')
     async def _ask(self, context: commands.Context, *, question: str):
