@@ -3,18 +3,22 @@ import json
 import numpy as np
 import faiss
 import openai
+import groq
 from dotenv import load_dotenv
 
 from typing import List
 
 load_dotenv(override=True)
 openai.api_key = os.environ['OPENAI_API_KEY']
+groq_api_key = os.environ['GROQ_API_KEY']
 
 # Setup OpenAI client
-client = openai.OpenAI()
-embedding_size = 1536
+openai_client = openai.OpenAI()
 embedding_model_id = 'text-embedding-3-small'
-generation_model_id = 'gpt-3.5-turbo'
+embedding_size = 1536
+
+groq_client = groq.Groq(api_key=groq_api_key)
+generation_model_id = 'llama3-70b-8192'
 
 class StreamGuardBot:
     def __init__(self, channel: str):
@@ -40,7 +44,7 @@ class StreamGuardBot:
         qa = {'question': question, 'answer': answer}
         self.faq.append(qa)
 
-        response = client.embeddings.create(
+        response = openai_client.embeddings.create(
             input=[question],
             model=embedding_model_id
         )
@@ -86,7 +90,7 @@ class StreamGuardBot:
 
         bot_prompt = system_prompt.format(channel=self.channel)
 
-        generation_api_response = client.chat.completions.create(
+        generation_api_response = groq_client.chat.completions.create(
             model=generation_model_id,
             messages=[
                 {'role': 'system', 'content': bot_prompt},
@@ -107,14 +111,14 @@ class StreamGuardBot:
         system_prompt = (
             "Users are communicating with {channel}, not the AI. "
             "Keep your responses concise and respond in the 3rd person. "
-            "Answer questions that correspond to the <<FAQ>>. "
-            "Respond with 'Not in {channel}'s <<FAQ>>.' to unrelated questions. "
+            "Answer questions that correspond to the FAQ. "
+            "Respond with 'Not in {channel}'s FAQ.' to unrelated questions. "
             "Do NOT make up your answer .\n"
             "<<FAQ>>\n"
             "{faq}"
         )
 
-        embedding_api_response = client.embeddings.create(
+        embedding_api_response = openai_client.embeddings.create(
             input=[question],
             model=embedding_model_id
         )
@@ -131,7 +135,7 @@ class StreamGuardBot:
             faq=str(self.faq[faq_index])
         )
 
-        generation_api_response = client.chat.completions.create(
+        generation_api_response = groq_client.chat.completions.create(
             model=generation_model_id,
             messages=[
                 {'role': 'system', 'content': bot_prompt},
@@ -141,5 +145,6 @@ class StreamGuardBot:
             temperature=0
         )
 
+        print("Not in {self.channel}'s FAQ.")
         message = generation_api_response.choices[0].message.content
-        return message if message != "Not in {channel}'s <<FAQ>>." else ""
+        return message if message != f"Not in {self.channel}'s FAQ." else ""
