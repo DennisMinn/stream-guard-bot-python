@@ -10,15 +10,14 @@ from typing import List
 
 load_dotenv(override=True)
 openai.api_key = os.environ['OPENAI_API_KEY']
-groq_api_key = os.environ['GROQ_API_KEY']
 
 # Setup OpenAI client
 openai_client = openai.OpenAI()
+expensive_generation_model_id = 'gpt-4o-2024-05-13'
+budget_generation_model_id = 'gpt-3.5-turbo-0125'
 embedding_model_id = 'text-embedding-3-small'
 embedding_size = 1536
 
-groq_client = groq.Groq(api_key=groq_api_key)
-generation_model_id = 'llama3-70b-8192'
 
 class StreamGuardBot:
     def __init__(self, channel: str):
@@ -90,8 +89,8 @@ class StreamGuardBot:
 
         bot_prompt = system_prompt.format(channel=self.channel)
 
-        generation_api_response = groq_client.chat.completions.create(
-            model=generation_model_id,
+        generation_api_response = openai_client.chat.completions.create(
+            model=budget_generation_model_id,
             messages=[
                 {'role': 'system', 'content': bot_prompt},
                 {'role': 'user', 'content': question}
@@ -135,8 +134,8 @@ class StreamGuardBot:
             faq=str(self.faq[faq_index])
         )
 
-        generation_api_response = groq_client.chat.completions.create(
-            model=generation_model_id,
+        generation_api_response = openai_client.chat.completions.create(
+            model=expensive_generation_model_id,
             messages=[
                 {'role': 'system', 'content': bot_prompt},
                 {'role': 'user', 'content': question}
