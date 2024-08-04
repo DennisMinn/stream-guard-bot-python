@@ -22,18 +22,16 @@ class Bot(commands.Bot):
     def __init__(self):
         os.makedirs('channels', exist_ok=True)
 
-        with open(f"channels/{config['channel']}.jsonl", 'a') as channel_file:
-            pass
-
         initial_channels = [
             os.path.splitext(channel_file)[0] for channel_file
             in os.listdir('channels')
         ]
 
         super().__init__(token=config['access_token'], prefix='!', initial_channels=initial_channels)
+
         self.channels = {}
         for channel in initial_channels:
-            self.channels[channel] = StreamGuardBot(channel)
+            self.channels[channel] = StreamGuardBot.from_pickle(f'channels/{channel}')
 
     async def event_ready(self):
         print(f'Logged in as | {self.nick}')
@@ -107,29 +105,40 @@ class Bot(commands.Bot):
         del self.channels[channel]
         os.remove(f'channels/{channel}.jsonl')
 
-    @commands.command(name='addQA')
-    async def add_qa(self, context: commands.Context, question: str, answer: str):
+    @commands.command(name='add')
+    async def add_faq(self, context: commands.Context, question: str, answer: str):
         if not context.author.is_broadcaster and not context.author.is_mod:
             return
 
         channel = context.channel.name
         stream_guard_bot = self.channels[channel]
-        response = stream_guard_bot.add_qa(question, answer)
+        response = stream_guard_bot.add_faq(question, answer)
 
         await context.send(response)
 
-    @commands.command(name='removeQA')
-    async def remove_qa(self, context: commands.Context, index: int):
+    @commands.command(name='remove')
+    async def remove_faq(self, context: commands.Context, index: int):
         if not context.author.is_broadcaster and not context.author.is_mod:
             return
-        
+
         channel = context.channel.name
         stream_guard_bot = self.channels[channel]
-        response = stream_guard_bot.remove_qa(index)
+        response = stream_guard_bot.remove_faq(index - 1)
 
         await context.send(response)
 
-    @commands.command(name='listFAQ')
+    @commands.command(name='update')
+    async def update_faq(self, context: commands.Context, index: int, answer: str):
+        if not context.author.is_broadcaster and not context.author.is_mod:
+            return
+
+        channel = context.channel.name
+        stream_guard_bot = self.channels[channel]
+        response = stream_guard_bot.remove_faq(index - 1)
+
+        await context.send(response)
+
+    @commands.command(name='faq')
     async def list_faq(self, context: commands.Context):
         channel = context.channel.name
         stream_guard_bot = self.channels[channel]
@@ -140,14 +149,14 @@ class Bot(commands.Bot):
             await context.send(chunk)
 
     @commands.command(name='_ask')
-    async def _ask(self, context: commands.Context, *, question: str):
+    async def retrieval_ask(self, context: commands.Context, *, question: str):
         channel = context.channel.name
         stream_guard_bot = self.channels[channel]
-        response = stream_guard_bot._respond(question)
-        
+
+        response = stream_guard_bot.retrieval_respond(question, qa_index)
         if response == '':
             return
-        
+
         await context.reply(response)
 
     @commands.command(name='ask')
@@ -161,11 +170,11 @@ class Bot(commands.Bot):
         
         await context.reply(response)
 
-    @commands.command(name='setResponseThreshold')
+    @commands.command(name='setThreshold')
     async def set_threhold(self, context: commands.Context, response_threshold: str):
         if not context.author.is_broadcaster and not context.author.is_mod:
             return
-        
+
         response_threshold = float(response_threshold)
         channel = context.channel.name
         stream_guard_bot = self.channels[channel]
@@ -173,17 +182,27 @@ class Bot(commands.Bot):
 
         await context.send(f'Response Threshold set to {response_threshold}')
 
-    @commands.command(name='toggleAskCommand')
-    async def set_threhold(self, context: commands.Context):
+    @commands.command(name='enableAsk')
+    async def enableAsk(self, context: commands.Context):
         if not context.author.is_broadcaster and not context.author.is_mod:
             return
 
         channel = context.channel.name
         stream_guard_bot = self.channels[channel]
-        stream_guard_bot.toggle_ask_command = not stream_guard_bot.toggle_ask_command
+        stream_guard_bot.toggle_ask_command = True
 
-        toggle_ask_command = 'enabled' if stream_guard_bot.toggle_ask_command else 'disabled'
-        await context.send(f'!ask {toggle_ask_command}')
+        await context.send('!ask enabled')
+
+    @commands.command(name='disableAsk')
+    async def disableAsk(self, context: commands.Context):
+        if not context.author.is_broadcaster and not context.author.is_mod:
+            return
+
+        channel = context.channel.name
+        stream_guard_bot = self.channels[channel]
+        stream_guard_bot.toggle_ask_command = False
+
+        await context.send('!ask disabled')
 
 
 bot = Bot()

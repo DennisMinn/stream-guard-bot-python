@@ -1,12 +1,10 @@
 import os
-import json
 import numpy as np
-import faiss
+import pickle
 import openai
-import groq
 from dotenv import load_dotenv
+from collections import namedtuple
 
-from typing import List
 
 load_dotenv(override=True)
 openai.api_key = os.environ['OPENAI_API_KEY']
@@ -14,69 +12,60 @@ openai.api_key = os.environ['OPENAI_API_KEY']
 # Setup OpenAI client
 openai_client = openai.OpenAI()
 expensive_generation_model_id = 'gpt-4o-2024-05-13'
-budget_generation_model_id = 'gpt-3.5-turbo-0125'
+budget_generation_model_id = 'gpt-4o-mini'
 embedding_model_id = 'text-embedding-3-small'
-embedding_size = 1536
+
+
+FAQEmbedding = namedtuple('FAQEmbedding', ('question', 'answer', 'embedding'))
 
 
 class StreamGuardBot:
     def __init__(self, channel: str):
         self.channel = channel
-        self.faq = []
-        self.response_threshold = 1
+        self.response_threshold = 0.5
         self.toggle_ask_command = False
-        self.vector_database = faiss.IndexFlatL2(embedding_size)
+        self.faq_embeddings_list = []
 
-        faq = []
-        if os.path.exists(f'channels/{self.channel}.jsonl'):
-            with open(f'channels/{self.channel}.jsonl') as channel_file:
-                faq = [json.loads(line) for line in channel_file]
-
-            # Remove the old FAQ, otherwise there will be duplicates
-            os.remove(f'channels/{self.channel}.jsonl')
-
-        # Rebuild vector database
-        for qa in faq:
-            self.add_qa(qa['question'], qa['answer'])
-
-    def add_qa(self, question: str, answer: str) -> str:
-        qa = {'question': question, 'answer': answer}
-        self.faq.append(qa)
-
+    def add_faq(self, question: str, answer: str) -> str:
+        # Create embeddings
         response = openai_client.embeddings.create(
             input=[question],
             model=embedding_model_id
         )
+        embedding = np.array([response.data[0].embedding])
 
-        qa_embedding = np.array([response.data[0].embedding])
-        self.vector_database.add(qa_embedding)
-        with open(f'channels/{self.channel}.jsonl', 'a') as channel_file:
-            qa_json = json.dumps(qa)
-            channel_file.write(qa_json + '\n')
+        faq_embedding = FAQEmbedding(question, answer, embedding)
+        self.faq_embeddings_list.append(faq_embedding)
+
+        self.to_pickle()
 
         return f'Added {question} -> {answer}'
 
-    def remove_qa(self, index: int) -> str:
-        index = index - 1
-        removed_qa = self.faq.pop(index)
+    def remove_faq(self, index: int) -> str:
+        removed_faq = self.faq_embeddings_list.pop(index)
 
-        # FAISS expects a 2-d np.array
-        self.vector_database.remove_ids(np.array([index]))
-        with open(f'channels/{self.channel}.jsonl', 'w') as channel_file:
-            for qa in self.faq:
-                qa_json = json.dumps(qa)
-                channel_file.write(qa_json + '\n')
+        self.to_pickle()
 
-        return f"{removed_qa['question']} -> {removed_qa['answer']}"
+        return f"Removed {removed_faq.question} -> {removed_faq.answer}"
+
+    def update_faq(self, index: int, answer: str) -> str:
+        faq_embedding = self.faq_embeddings_list[index]
+        new_faq_embedding = FAQEmbedding(faq_embedding.question, answer, faq_embedding.embedding)
+
+        self.faq_embeddings_list[index] = new_faq_embedding
+
+        self.to_pickle()
+
+        return f'Updated {new_faq_embedding.question} -> {answer}'
 
     def list_faq(self) -> str:
-        faq = [
-            f'{i + 1}. {qa_dict["question"]} -> {qa_dict["answer"]}'
-            for i, qa_dict in enumerate(self.faq)
+        faq_list = [
+            f'{i + 1}. {faq_dict["question"]} -> {faq_dict["answer"]}'
+            for i, faq_dict in enumerate(self.faq_embeddings_list)
         ]
 
-        faq = ' | '.join(faq)
-        return faq
+        faq_list = ' | '.join(faq_list)
+        return faq_list
 
     def respond(self, question: str) -> str:
         if not self.toggle_ask_command:
@@ -101,12 +90,8 @@ class StreamGuardBot:
 
         message = generation_api_response.choices[0].message.content
         return message
-    
-    def _respond(self, question: str) -> str:
-        # Ignores query if empty database is empty
-        if self.vector_database.ntotal < 1:
-            return ''
 
+    def retrieval_respond(self, question: str, faq_index: int) -> str:
         system_prompt = (
             "Users are communicating with {channel}, not the AI. "
             "Keep your responses concise and respond in the 3rd person. "
@@ -114,28 +99,18 @@ class StreamGuardBot:
             "Respond with 'Not in {channel}'s FAQ.' to unrelated questions. "
             "Do NOT make up your answer .\n"
             "<<FAQ>>\n"
-            "{faq}"
+            "{{question: {question}, answer: {answer}}}"
         )
 
-        embedding_api_response = openai_client.embeddings.create(
-            input=[question],
-            model=embedding_model_id
-        )
-        question_embedding = np.array([embedding_api_response.data[0].embedding])
-
-        distance, faq_index = self.vector_database.search(question_embedding, 1)
-        distance, faq_index = distance.item(), faq_index.item()
-
-        if distance > self.response_threshold:
-            return ''
-
+        faq_embedding = self.faq_embeddings_list[faq_index]
         bot_prompt = system_prompt.format(
             channel=self.channel,
-            faq=str(self.faq[faq_index])
+            question=faq_embedding.question,
+            answer=faq_embedding.answer
         )
 
         generation_api_response = openai_client.chat.completions.create(
-            model=expensive_generation_model_id,
+            model=budget_generation_model_id,
             messages=[
                 {'role': 'system', 'content': bot_prompt},
                 {'role': 'user', 'content': question}
@@ -146,3 +121,45 @@ class StreamGuardBot:
 
         message = generation_api_response.choices[0].message.content
         return message if message != f"Not in {self.channel}'s FAQ." else ""
+
+    def get_related_faq_index(self, question: str):
+        # Ignores query if empty database is empty
+        if len(self.faq_embeddings_list) < 1:
+            return -1
+
+        similiarity_scores = self.get_similiarity_scores(question)
+        index = np.argmax(similiarity_scores).item()
+
+        if similiarity_scores[index] < self.response_threshold:
+            return -1
+        else:
+            return index
+
+    def get_similiarity_scores(self, question: str):
+        embedding_api_response = openai_client.embeddings.create(
+            input=[question],
+            model=embedding_model_id
+        )
+
+        question_embedding = np.array([embedding_api_response.data[0].embedding])
+
+        _, _, embeddings = zip(*self.faq_embeddings_list)
+        embeddings = np.concatenate(embeddings, axis=0)
+
+        if len(embeddings) == 1:
+            embeddings = embeddings.reshape(1, -1)
+
+        similiarity_scores = np.dot(question_embedding, embeddings.T)
+        similiarity_scores = similiarity_scores.squeeze()
+        return similiarity_scores
+
+    @classmethod
+    def from_pickle(fpath):
+        with open(fpath, 'rb') as pickle_file:
+            stream_guard_bot = pickle.load(pickle_file)
+
+        return stream_guard_bot
+
+    def to_pickle(self):
+        with open(f'channels/{self.channel}.pkl', 'wb') as pickle_file:
+            pickle.dump(self, pickle_file)
